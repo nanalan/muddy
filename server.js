@@ -58,7 +58,7 @@ let server = net.createServer(client => {
     } else if (str === '\u001b[C') {
       // Right
       if (client.currentIndex < client.currentLine.length) client.currentIndex++
-    } else if (str === '\r\u0000') {
+    } else if (str === '\r\u0000' || str === '\r\n') {
       // Newline
       if (command(...parse(client.currentLine)) === false) return
       client.currentLine = ''
