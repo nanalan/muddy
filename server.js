@@ -27,12 +27,21 @@ let server = net.createServer(client => {
     }
   }
 
-  client.logs = Array(30) // TODO
+  client.logs = Array(30).fill(ansi.clearLine()) // TODO
   client.log = msg => {
-    client.logs.shift()
-    client.logs.push(ansi.clearLine() + msg.trim())
+    client.logs[client.logs.length-1] = ansi.clearLine() + msg
 
-    client.write(/*'\033[s'*/'\E8' + ansi.up(1) + ansi.clearLine() + ansi.up() + ansi.up(client.logs.length) + client.logs.join('\n') + /*'\033[u'*/ '\E7')
+    // Redraw the entire log except for the bottom line
+
+    let res = '\u001b7' + ansi.up(1)
+
+    for (let log of client.logs) {
+      res += log
+    }
+
+    res += ansi.down(1) + '\u001b8'
+
+    client.write(res)
   }
 
   client.writeLn = msg => {
