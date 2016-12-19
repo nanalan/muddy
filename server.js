@@ -27,12 +27,12 @@ let server = net.createServer(client => {
     }
   }
 
-  client.logs = Array(10)
+  client.logs = Array(30) // TODO
   client.log = msg => {
     client.logs.shift()
     client.logs.push(ansi.clearLine() + msg.trim())
 
-    client.write('\033[s' + ansi.up(1) + ansi.clearLine() + ansi.up() + ansi.up(client.logs.length) + client.logs.join('\n') + '\033[u')
+    client.write(/*'\033[s'*/'\E8' + ansi.up(1) + ansi.clearLine() + ansi.up() + ansi.up(client.logs.length) + client.logs.join('\n') + /*'\033[u'*/ '\E7')
   }
 
   client.writeLn = msg => {
