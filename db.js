@@ -53,9 +53,9 @@ UserSchema.methods.theirs = function() {
 }
 
 const style = (gender, name) => {
-  if (gender === 'male') return chalk.bold.cyan(name)
-  if (gender === 'female') return chalk.bold.magenta(name)
-  return chalk.bold.yellow(name)
+  if (gender === 'male') return chalk.cyan(name)
+  if (gender === 'female') return chalk.magenta(name)
+  return chalk.yellow(name)
 }
 
 const User = mongoose.model('User', UserSchema)

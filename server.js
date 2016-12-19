@@ -21,12 +21,18 @@ let server = net.createServer(client => {
 
   client.broadcast = message => {
     for (let sock of clients) {
-      if (sock !== client) {
-        sock.writeLn(message)
+      if (sock !== client && sock.state === 'ingame') {
+        sock.log(message)
       }
     }
+  }
 
-    console.log('broadcast:', message)
+  client.logs = Array(10)
+  client.log = msg => {
+    client.logs.shift()
+    client.logs.push(ansi.clearLine() + msg.trim())
+
+    client.write('\033[s' + ansi.up(1) + ansi.clearLine() + ansi.up() + ansi.up(client.logs.length) + client.logs.join('\n') + '\033[u')
   }
 
   client.writeLn = msg => {
@@ -54,8 +60,6 @@ let server = net.createServer(client => {
   }
 
   client.on('data', data => {
-    console.log(data)
-
     if (client.disabled) return
     let str = data.toString().trim().replace(/[^\x20-\x7F]/g, '')
     if (!str) return
@@ -74,6 +78,7 @@ let server = net.createServer(client => {
           .then(user => {
             if (user) {
               client.state = 'login-pass'
+              client.user = user
 
               client.write(`Pass? `)
               client.enable()
@@ -186,6 +191,7 @@ ${style(client.gender, `${client.name} (${client.race})`)}, ${chalk.bold(client.
           client.writeLn(`Done! Welcome to ${chalk.red.bold('Jasma')}, ${style(client.gender, client.name)}!\n\n`)
 
           client.state = 'ingame'
+          client.user = user
           client.write('> ' + chalk.styles.cyan.open)
 
           client.enable()
@@ -228,13 +234,13 @@ ${style(client.gender, `${client.name} (${client.race})`)}, ${chalk.bold(client.
       let args = parse(str)
 
       client.write(chalk.styles.bold.close)
+      client.log(`> ${chalk.cyan(str)}\n`)
 
       command(...args)
         .then(stop => {
           if (stop) return
 
           client.write('> ' + chalk.styles.cyan.open)
-
           client.enable()
         })
         .catch(console.error)
@@ -249,13 +255,11 @@ ${style(client.gender, `${client.name} (${client.race})`)}, ${chalk.bold(client.
 
   // Process a command + args set
   function command(cmd, ...args) {
-    console.log(cmd, args)
-
     if (cmd in commands) {
       return commands[cmd](client, ...args)
     } else {
       return new Promise((resolve, reject) => {
-        client.writeLn(chalk.red(`Unknown command ${chalk.bold(cmd)}`))
+        client.log(chalk.red(`Unknown command ${chalk.bold(cmd)}\n`))
         resolve()
       })
     }

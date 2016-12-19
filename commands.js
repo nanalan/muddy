@@ -10,9 +10,18 @@ module.exports = {
     resolve(false)
   }),
 
+  noop: client => new Promise((resolve) => resolve()),
+
   say: (client, ...args) => new Promise((resolve, reject) => {
-    let str = args.join(' ')
-    client.broadcast(str)
+    let message = chalk.yellow(args.join(' '))
+
+    client.broadcast(
+      `${client.user.styled()} says ${message}\n`
+    )
+
+    client.log(
+      `You say ${message}\n`
+    )
 
     resolve()
   }),

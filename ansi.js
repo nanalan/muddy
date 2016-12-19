@@ -1,3 +1,6 @@
+// some of this stolen from @liam4
+// thx m8
+
 const ESC = '\x1b'
 
 module.exports = {
