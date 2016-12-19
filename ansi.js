@@ -48,7 +48,7 @@ module.exports = {
     return `${ESC}[${line + 1};${col + 1}H`
   },
 
-  resetAttributes() {
+  reset() {
     // Resets all attributes, including text decorations, foreground and
     // background color.
 

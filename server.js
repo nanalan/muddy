@@ -2,6 +2,11 @@ const net = require('net')
 const ansi = require('./ansi')
 const chalk = require('chalk')
 const commands = require('./commands')
+const { db, User, style } = require('./db')
+const races = require('./races')
+
+const capitalize = ([first, ...rest]) =>
+  first.toUpperCase() + rest.join('').toLowerCase()
 
 let clients = []
 
@@ -14,65 +19,226 @@ let server = net.createServer(client => {
 
   clients.push(client)
 
-  // Disable LINEMODE (enable charmode) on the client
-  client.write(new Buffer([ 255, 251, 1 ]))  // IAC WILL ECHO
-  client.write(new Buffer([ 255, 251, 3 ]))  // IAC WILL SUPRESS_GO_AHEAD
-  client.write(new Buffer([ 255, 252, 34 ])) // IAC WONT LINEMODE
-
-  client.currentIndex = 0
-  client.currentLine = ''
-  client.lines = []
-
   client.broadcast = message => {
     for (let sock of clients) {
       if (sock !== client) {
-        sock.lines.push(message)
-        sock.redraw()
+        sock.writeLn(message)
       }
     }
 
     console.log('broadcast:', message)
   }
 
-  client.redraw = () => {
-    client.write(ansi.clearScreen() + ansi.clearLine())
-    client.write(client.lines.join(`\n${ansi.clearLine()}`))
-    client.write(`\n${ansi.clearLine()}`)
-    client.write(highlight(client.currentLine))
-    client.write(ansi.left(client.currentLine.length))
-    if (client.currentIndex > 0) client.write(ansi.right(client.currentIndex))
+  client.writeLn = msg => {
+    client.write(ansi.up() + '\n' + ansi.clearLine() + msg.replace(/\n/g, '\n' + ansi.clearLine()) + '\n' + ansi.down() + ansi.left(9000))
+  }
+
+  client.disable = () => {
+    client.disabled = true
+
+    // IAC WILL ECHO (disable localecho on client)
+    client.write(new Buffer([0xFF, 0xFB, 0x01]))
+
+    // ANSI hide cursor
+    client.write('\x1b[?25l')
+  }
+
+  client.enable = () => {
+    client.disabled = false
+
+    // IAC WONT ECHO (enable localecho on client)
+    client.write(new Buffer([0xFF, 0xFC, 0x01]))
+
+    // ANSI show cursor
+    client.write('\x1b[?25h')
   }
 
   client.on('data', data => {
-    let str = data.toString()
+    console.log(data)
 
-    if (str === '\x7F') {
-      // Backspace
-      client.currentLine = client.currentLine
-        .substr(0, client.currentIndex - 1) + client.currentLine
-        .substr(client.currentIndex)
-      if (client.currentIndex > 0) client.currentIndex--
-    } else if (str === '\u001b[D') {
-      // Left
-      if (client.currentIndex > 0) client.currentIndex--
-    } else if (str === '\u001b[C') {
-      // Right
-      if (client.currentIndex < client.currentLine.length) client.currentIndex++
-    } else if (str === '\r\u0000' || str === '\r\n') {
-      // Newline
-      if (command(...parse(client.currentLine)) === false) return
-      client.currentLine = ''
-      client.currentIndex = 0
-    } else if (/^[\x00-\xFF]$/.test(str)) {
-      // ASCII char
-      client.currentLine += data.toString()
-      client.currentIndex++
-    } else {
-      // wat?
-      console.dir(str)
+    if (client.disabled) return
+    let str = data.toString().trim().replace(/[^\x20-\x7F]/g, '')
+    if (!str) return
+
+    client.disable()
+    client.write(ansi.reset())
+
+    if (client.state === 'login-name') {
+      if (/^[A-Za-z]+$/.test(str)) {
+        // Valid
+        let name = client.name = capitalize(str)
+
+        client.write(ansi.up() + ansi.clearLine() + 'Name? ' + chalk.blue(name) + '\n' + ansi.clearLine())
+
+        User.findOne({ name }).exec()
+          .then(user => {
+            if (user) {
+              client.state = 'login-pass'
+
+              client.write(`Pass? `)
+              client.enable()
+
+              // IAC WILL ECHO (disable localecho on client)
+              client.write(new Buffer([0xFF, 0xFB, 0x01]))
+            } else {
+              client.state = 'login-make'
+
+              client.write(`Would you like to create a new character, ${chalk.bold(name)}? ` + chalk.styles.blue.open)
+              client.enable()
+            }
+          })
+          .catch(err => {
+            console.error(err)
+
+            client.write(chalk.red('An unknown error occurred.\n'))
+            client.write(`Name? ` + chalk.styles.blue.open)
+            client.enable()
+          })
+      } else {
+        // Invalid
+        client.write(ansi.clearLine() + `${chalk.red('Invalid, you may only use A-Z!')}\n${ansi.clearLine()}Name? ` + chalk.styles.blue.open)
+        client.enable()
+      }
+    } else if (client.state === 'login-make') {
+      if (str.toLowerCase()[0] === 'y') {
+        client.writeLn(ansi.clearScreen())
+        client.write(`Are you ${chalk.cyan('male')}, ${chalk.magenta('female')}, or ${chalk.yellow('other')}? ` + chalk.styles.blue.open)
+        client.state = 'login-make-gender'
+        client.enable()
+      } else {
+        client.state = 'login-name'
+        client.write(`\nName? ` + chalk.styles.blue.open)
+        client.enable()
+      }
+    } else if (client.state === 'login-make-gender') {
+      let gender = client.gender = str.toLowerCase()[0]
+
+      if (gender === 'm') gender = 'male'
+      else if (gender === 'f') gender = 'female'
+      else gender = 'other'
+
+      client.gender = gender
+      client.write(ansi.clearScreen())
+      client.writeLn(races.join('\n\n'))
+
+      client.state = 'login-make-race'
+      client.writeLn(chalk.bold('\nScroll up to see races.'))
+      client.write(`Which race shall you be? ` + chalk.styles.blue.open)
+      client.enable()
+    } else if (client.state === 'login-make-race') {
+      let race = client.race = capitalize(str.trim())
+
+      if (['Human', 'Elf', 'Dwarf', 'Giant'].includes(race)) {
+        client.state = 'login-make-job'
+        client.write(ansi.clearScreen())
+        client.writeLn(races[['Human', 'Elf', 'Dwarf', 'Giant'].indexOf(race)])
+        client.write(`\nWhat will be your class? ` + chalk.styles.blue.open)
+        client.enable()
+      } else {
+        client.writeLn(chalk.red(`\n"${race}" is not a race.`))
+        client.write(`Which race shall you be? ` + chalk.styles.blue.open)
+        client.enable()
+      }
+    } else if (client.state === 'login-make-job') {
+      let job = client.class = capitalize(str.trim())
+
+      if (['Warrior', 'Monk', 'Mage', 'Thief', 'Illusionist', 'Archer'].includes(job)) {
+        client.state = 'login-make-check'
+        client.writeLn(ansi.clearScreen() + `
+${style(client.gender, `${client.name} (${client.race})`)}, ${chalk.bold(client.class)}
+`)
+        client.write(`Is this OK? ` + chalk.styles.blue.open)
+        client.enable()
+      } else {
+        client.writeLn(chalk.red(`\n"${job}" is not a valid class.`))
+        client.write(`What will be your class? ` + chalk.styles.blue.open)
+        client.enable()
+      }
+    } else if (client.state === 'login-make-check') {
+      if (str.toLowerCase()[0] === 'y') {
+        client.writeLn(ansi.clearScreen() + `And, lastly, you must set a password, ${style(client.gender, client.name)}.`)
+        client.write(`Pass? ` + chalk.styles.blue.open)
+        client.state = 'login-make-pass'
+        client.enable()
+      } else {
+        client.state = 'login-make'
+        client.write(ansi.clearScreen() + 'Starting over.')
+        client.enable()
+      }
+
+      // IAC WILL ECHO (disable localecho on client)
+      client.write(new Buffer([0xFF, 0xFB, 0x01]))
+    } else if (client.state === 'login-make-pass') {
+      let pass = str
+
+      client.writeLn(ansi.clearScreen() + `Creating ${style(client.gender, client.name)}...`)
+
+      let user = new User({
+        name: client.name,
+        pass, // hashing done in db.js
+        gender: client.gender,
+        race: client.race,
+        class: client.class,
+      })
+
+      user.save()
+        .then(() => {
+          client.writeLn(`Done! Welcome to ${chalk.red.bold('Jasma')}, ${style(client.gender, client.name)}!\n\n`)
+
+          client.state = 'ingame'
+          client.write('> ' + chalk.styles.cyan.open)
+
+          client.enable()
+        })
+        .catch(e => {
+          console.error(e)
+          client.writeLn(chalk.red('An unknown error occured.'))
+          client.state = 'login-make'
+        })
+    } else if (client.state === 'login-pass') {
+      let pass = str
+
+      client.write('\n'+ansi.clearLine()+chalk.dim('...'))
+
+      User.findOne({ name: client.name }).exec()
+        .then(user => user.checkPass(pass))
+        .then(valid => {
+          if (valid) {
+            client.writeLn(ansi.clearScreen() + chalk.green.bold(`Welcome back!\n`))
+            client.state = 'ingame'
+            client.write('> ' + chalk.styles.cyan.open)
+
+            client.enable()
+          } else {
+            client.write(chalk.red('Invalid password.\n'))
+            client.state = 'login-name'
+            client.write(`Name? ` + chalk.styles.blue.open)
+            client.enable()
+          }
+        })
+        .catch(err => {
+          console.error(err)
+
+          client.write(chalk.red('An unknown error occurred.\n'))
+          client.state = 'login-name'
+          client.write(`Name? ` + chalk.styles.blue.open)
+          client.enable()
+        })
+    } else if (client.state === 'ingame') {
+      let args = parse(str)
+
+      client.write(chalk.styles.bold.close)
+
+      command(...args)
+        .then(stop => {
+          if (stop) return
+
+          client.write('> ' + chalk.styles.cyan.open)
+
+          client.enable()
+        })
+        .catch(console.error)
     }
-
-    client.redraw()
   })
 
   client.on('end', () => {
@@ -85,31 +251,35 @@ let server = net.createServer(client => {
   function command(cmd, ...args) {
     console.log(cmd, args)
 
-    client.lines.push(highlight([cmd, ...args].join(' ')))
-
     if (cmd in commands) {
       return commands[cmd](client, ...args)
     } else {
-      client.lines.push(chalk.red(`Unknown command ${chalk.bold(cmd)}`))
+      return new Promise((resolve, reject) => {
+        client.writeLn(chalk.red(`Unknown command ${chalk.bold(cmd)}`))
+        resolve()
+      })
     }
   }
 
   // Parse a command+args string into array
   function parse(str) {
-    // kek
     return str.split(' ')
   }
 
-  // Highlight a string based on the command
-  function highlight(ln) {
-    let parts = parse(ln)
-    let cmd = parts[0] in commands
-      ? chalk.cyan.bold(parts[0])
-      : chalk.red.bold(parts[0])
-    let args = parts.splice(1)
+  client.writeLn(ansi.clearScreen() + chalk.bold.red(`
+  _________ _______  _______  _______  _______
+  \\__    _/(  ___  )(  ____ \\(       )(  ___  )
+     )  (  | (   ) || (    \\/| () () || (   ) |
+     |  |  | (___) || (_____ | || || || (___) |
+     |  |  |  ___  |(_____  )| |(_)| ||  ___  |
+     |  |  | (   ) |      ) || |   | || (   ) |
+  |\\_)  )  | )   ( |/\\____) || )   ( || )   ( |
+  (____/   |/     \\|\\_______)|/     \\||/     \|\n\n`))
 
-    return [cmd, ...args].join(' ')
-  }
+  client.disable()
+  client.state = 'login-name'
+  client.write(`Name? ` + chalk.styles.blue.open)
+  client.enable()
 })
 
 server.listen(9000)

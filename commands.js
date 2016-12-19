@@ -2,13 +2,18 @@ const ansi = require('./ansi')
 const chalk = require('chalk')
 
 module.exports = {
-  quit: client => {
-    client.end(`\n${ansi.clearLine()}Bye\n${ansi.clearLine()}`)
-    return false
-  },
+  quit: client => new Promise((resolve, reject) => {
+    client.enable()
+    client.write(ansi.reset() + 'Bye\n')
+    client.end()
 
-  say: (client, ...args) => {
+    resolve(false)
+  }),
+
+  say: (client, ...args) => new Promise((resolve, reject) => {
     let str = args.join(' ')
     client.broadcast(str)
-  },
+
+    resolve()
+  }),
 }
